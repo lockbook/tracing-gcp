@@ -1,0 +1,16 @@
+[package]
+name = "tracing-gcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["json"] }
+# tracing-subscriber = "0.3.18"
+serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+uuid = { version = "1.11.0", features = ["v4"] } 
+tracing-appender = "0.2"

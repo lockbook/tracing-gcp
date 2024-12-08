@@ -1,26 +1,26 @@
-use std::fs;
-
-use tracing::info;
-use tracing_appender::rolling::{self};
-use tracing_gcp::GcpEventFormatter;
-use tracing_subscriber::{fmt, layer::SubscriberExt, Registry};
+use std::fs::{self, File};
+use tracing::*;
+use tracing_gcp::GcpLayer;
+use tracing_subscriber::{layer::SubscriberExt, Registry};
 use uuid::Uuid;
 
 #[test]
-fn test_setup() {
+fn log_readout() {
     let log = Uuid::new_v4().to_string();
-    let subscriber = Registry::default().with(
-        fmt::Layer::new()
-            .event_format(GcpEventFormatter::default())
-            .with_writer(rolling::never("/tmp", &log)),
-    );
+    let log = format!("/tmp/{log}");
+    println!("log file: {log}");
+
+    let subscriber = Registry::default().with(GcpLayer::init_with_writer(
+        File::create(log.clone()).unwrap(),
+    ));
 
     tracing::subscriber::set_global_default(subscriber).unwrap();
 
     info!("test");
-    info!(a = 5, "test");
+    warn!(a = 5, "test");
+    info!(requestMethod = "post", "req received");
 
-    let log_content = fs::read_to_string(format!("/tmp/{log}")).unwrap();
+    let log_content = fs::read_to_string(log).unwrap();
 
     println!("{log_content}");
     assert!(log_content.contains("test"));

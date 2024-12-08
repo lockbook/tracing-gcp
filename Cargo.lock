@@ -101,6 +101,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "google_cloud_logging"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0f4f58047fc5936c6779a36a56e383dc6490bb631163da8c1c41234ffc48efc"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -409,6 +419,7 @@ name = "tracing-gcp"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "google_cloud_logging",
  "serde",
  "serde_json",
  "tracing",

@@ -5,11 +5,12 @@ edition = "2021"
 
 [dependencies]
 tracing = "0.1.40"
+# todo: json needed? 
 tracing-subscriber = { version = "0.3.18", features = ["json"] }
-# tracing-subscriber = "0.3.18"
 serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json = "1.0"
+google_cloud_logging = "0.1.0"
 
 [dev-dependencies]
 uuid = { version = "1.11.0", features = ["v4"] } 

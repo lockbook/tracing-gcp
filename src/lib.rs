@@ -1,92 +1,161 @@
-mod google_cloud_logging;
+use std::{collections::HashMap, io::Write, sync::Mutex};
 
-use std::collections::HashMap;
-
-use google_cloud_logging::{GCLogSeverity, GoogleCloudStructLog};
-use tracing::{field::Visit, span::{Attributes, Id}, Level, Subscriber};
-use tracing_subscriber::{
-    fmt::{self, format::Writer, FormatEvent, FormatFields}, layer::Context, registry::LookupSpan, Layer
+use google_cloud_logging::{GCHttpMethod, GCHttpRequest, GCLogSeverity, GoogleCloudStructLog};
+use tracing::{
+    field::Visit,
+    span::{self, Id},
+    Level, Subscriber,
 };
+use tracing_subscriber::Layer;
 
-// pub fn layer<S>() -> Layer<S>
-// {
-//         fmt::layer()
-//             .json()
-//             .event_format(GcpEventFormatter::default()),
-// }
-
-#[derive(Default)]
-pub struct GcpEventFormatter {}
-
-impl Subscriber for GcpEventFormatter {
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        todo!()
-    }
-
-    fn new_span(&self, span: &span::Attributes<'_>) -> span::Id {
-        todo!()
-    }
-
-    fn record(&self, span: &span::Id, values: &span::Record<'_>) {
-        todo!()
-    }
-
-    fn record_follows_from(&self, span: &span::Id, follows: &span::Id) {
-        todo!()
-    }
-
-    fn event(&self, event: &tracing::Event<'_>) {
-        todo!()
-    }
-
-    fn enter(&self, span: &span::Id) {
-        todo!()
-    }
-
-    fn exit(&self, span: &span::Id) {
-        todo!()
-    }
+pub struct GcpLayer<W: Write> {
+    state: Mutex<State>,
+    write: Mutex<W>,
 }
 
-impl<S> Layer<S> for GcpEventFormatter
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
-        if let Some(span) = ctx.span(id) {
-            let mut extensions = span.extensions_mut();
-            let mut field_collector = FieldCollector::new();
-            attrs.record(&mut field_collector);
-            extensions.insert(field_collector.fields);
+impl<W: Write> GcpLayer<W> {
+    pub fn init_with_writer(w: W) -> Self {
+        Self {
+            state: Default::default(),
+            write: Mutex::new(w),
         }
     }
 }
 
-impl<S, N> FormatEvent<S, N> for GcpEventFormatter
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-    N: for<'a> FormatFields<'a> + 'static,
-{
-    fn format_event(
-        &self,
-        ctx: &fmt::FmtContext<'_, S, N>,
-        mut writer: Writer<'_>,
-        event: &tracing::Event<'_>,
-    ) -> std::fmt::Result {
-        let mut entry = GoogleCloudStructLog::default();
+#[derive(Default)]
+struct State {
+    spans: HashMap<Id, IR>,
+}
 
-        if let Some(scope) = ctx.event_scope() {
-            for span in scope.from_root() {
-                let a = S::span_data(span.id());
+#[derive(Default)]
+struct IR {
+    pub severity: Option<GCLogSeverity>,
+    pub method: Option<GCHttpMethod>,
+    pub parent: Option<Id>,
+    pub message: Option<String>,
+    pub unknown_fields: Vec<(String, String)>,
+}
+
+impl IR {
+    fn apply(&self, log_entry: &mut GoogleCloudStructLog) {
+        if let Some(sev) = self.severity {
+            log_entry.severity = Some(sev);
+        }
+
+        if let Some(meth) = self.method {
+            match &mut log_entry.http_request {
+                Some(req) => {
+                    req.request_method = Some(meth);
+                }
+                None => {
+                    let mut req = GCHttpRequest::default();
+                    req.request_method = Some(meth);
+                    log_entry.http_request = Some(req);
+                }
             }
         }
 
-        entry.severity = severity(event);
-        event.record(&mut entry);
+        if let Some(ref message) = self.message {
+            log_entry.message = Some(message.clone());
+        }
 
-        let entry = serde_json::to_string(&entry).unwrap_or_else(fatal_log);
-        writeln!(writer, "{entry}")?;
-        Ok(())
+        for (key, val) in &self.unknown_fields {
+            log_entry.labels.insert(key.clone(), val.clone());
+        }
+    }
+}
+
+impl<S: Subscriber, W: Write + 'static> Layer<S> for GcpLayer<W> {
+    fn on_new_span(
+        &self,
+        attrs: &span::Attributes<'_>,
+        id: &span::Id,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut state = self.state.lock().unwrap();
+
+        let mut ir = IR::default();
+        ir.parent = attrs.parent().cloned();
+        attrs.values().record(&mut ir);
+
+        state.spans.insert(id.clone(), ir);
+    }
+
+    fn on_record(
+        &self,
+        id: &Id,
+        values: &span::Record<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut state = self.state.lock().unwrap();
+
+        if let Some(ir) = state.spans.get_mut(id) {
+            values.record(ir);
+        }
+    }
+
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        // this is the only fn that would benefit from RwLock
+        let state = self.state.lock().unwrap();
+
+        let mut ir = IR::default();
+        ir.parent = event.parent().cloned();
+        ir.severity = severity(event);
+        event.record(&mut ir);
+
+        let mut log_entry = GoogleCloudStructLog::default();
+        ir.apply(&mut log_entry);
+
+        // process parents
+        let mut par_ir = &ir;
+        loop {
+            let Some(ref parent) = par_ir.parent else {
+                break;
+            };
+
+            let Some(parent) = state.spans.get(parent) else {
+                break;
+            };
+
+            parent.apply(&mut log_entry);
+            par_ir = parent;
+        }
+
+        // log_entry ready to be used
+        // may make sense to use a queue and do this somewhere else in the future
+        let log_entry = serde_json::to_string(&log_entry).unwrap();
+        writeln!(self.write.lock().unwrap(), "{log_entry}").unwrap();
+    }
+
+    fn on_close(&self, id: span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        self.state.lock().unwrap().spans.remove(&id);
+    }
+}
+
+impl Visit for IR {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        match field.name() {
+            "requestMethod" => {
+                let method = format!("{:?}", value).to_lowercase();
+                self.method = match method.as_ref() {
+                    "\"post\"" => Some(GCHttpMethod::Post),
+                    "\"get\"" => Some(GCHttpMethod::Get),
+                    "\"put\"" => Some(GCHttpMethod::Put),
+                    "\"head\"" => Some(GCHttpMethod::Head),
+                    _ => None,
+                }
+            }
+            "message" => {
+                self.message = Some(format!("{:?}", value));
+            }
+            name => self
+                .unknown_fields
+                .push((name.to_string(), format!("{:?}", value))),
+        }
     }
 }
 
@@ -98,19 +167,4 @@ fn severity(e: &tracing::Event<'_>) -> Option<GCLogSeverity> {
         Level::WARN => Some(GCLogSeverity::Warning),
         Level::ERROR => Some(GCLogSeverity::Error),
     }
-}
-
-impl Visit for GoogleCloudStructLog<'_> {
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            self.message = Some(format!("{:?}", value));
-        } else {
-            self.labels
-                .insert(field.name().to_string(), format!("{:?}", value));
-        }
-    }
-}
-
-fn fatal_log(_e: serde_json::Error) -> String {
-    "todo".to_string()
 }

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "UNLICENSE"
 description = "tracing subscriber for structured logging in gcp"
+license = "BSD-3-Clause"
 author = "parth"
 
 [dependencies]

@@ -16,9 +16,21 @@ fn log_readout() {
 
     tracing::subscriber::set_global_default(subscriber).unwrap();
 
+    let s = span!(
+        Level::INFO,
+        "request received",
+        http.url = "/test_url",
+        http.method = "post",
+        http.ua = "MOZILLA",
+        http.remote_ip = "192.158.3.3",
+        http.server_ip = "200.1.1.1",
+        http.latency = "5s",
+        user = "parth",
+    );
+    let _s = s.enter();
     info!("test");
     warn!(a = 5, "test");
-    info!(requestMethod = "post", "req received");
+    info!(http.status = 200, "req processed");
 
     let log_content = fs::read_to_string(log).unwrap();
 

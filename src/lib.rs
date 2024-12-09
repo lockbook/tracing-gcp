@@ -41,6 +41,7 @@ where
         }
     }
 
+    // todo: this bit didn't seem to work, test it
     fn on_record(
         &self,
         id: &Id,
